@@ -10,6 +10,19 @@ from utils.helpers import clean_music_metadata, format_duration
 logger = logging.getLogger(__name__)
 
 
+def _get_cookie_file() -> Optional[str]:
+    """YouTube bot-blokdan o'tish uchun cookies.txt faylini topish."""
+    paths = [
+        config.BASE_DIR / "cookies.txt",
+        Path("/etc/secrets/cookies.txt"),
+        config.DATA_DIR / "cookies.txt",
+    ]
+    for p in paths:
+        if p.exists() and p.stat().st_size > 50:
+            return str(p)
+    return None
+
+
 def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     """YouTube dan qo'shiqlarni qidirish (sinxrron qism)."""
     ydl_opts = {
@@ -156,6 +169,11 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             'retries': 3,
         }
     ]
+
+    cookie_file = _get_cookie_file()
+    for s in strategies:
+        if cookie_file:
+            s['cookiefile'] = cookie_file
 
     for strat_idx, opts in enumerate(strategies, start=1):
         try:
