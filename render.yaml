@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: melodiya-bot
+    env: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: RESULTS_PER_PAGE
+        value: "10"
+      - key: MAX_DURATION_SECONDS
+        value: "1200"
+
