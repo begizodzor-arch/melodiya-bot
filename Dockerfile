@@ -18,5 +18,8 @@ COPY . .
 # Ma'lumotlar papkalarini yaratish
 RUN mkdir -p data downloads
 
+ENV PORT=10000
+EXPOSE 10000
+
 CMD ["python", "main.py"]
 

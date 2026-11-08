@@ -79,7 +79,7 @@ async def on_shutdown(bot: Bot):
 
 async def start_web_server():
     """Render.com yoki bulutli hostinglar uchun 24/7 Healthcheck Web Server."""
-    port = int(os.getenv("PORT", "8080"))
+    port = int(os.getenv("PORT", "10000"))
     app = web.Application()
 
     async def healthcheck(request):
@@ -92,7 +92,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"🌐 Healthcheck Web server 0.0.0.0:{port} portida ishga tushdi (Render uchun).")
+    logger.info(f"🌐 Healthcheck Web server 0.0.0.0:{port} portida muvaffaqiyatli ishga tushdi.")
 
 
 async def main():
@@ -100,12 +100,11 @@ async def main():
         logger.error("❌ BOT_TOKEN sozlanmagan! .env faylini tekshiring.")
         sys.exit(1)
 
-    # Render.com yoki PORT berilgan bulutli serverlarda web serverni fon rejimida yoqish
-    if os.getenv("PORT"):
-        try:
-            await start_web_server()
-        except Exception as e:
-            logger.warning(f"Web serverni ishga tushirishda ogohlantirish: {e}")
+    # Render.com va bulutli hostinglar uchun web serverni doim yoqish (port timeout bermasligi uchun)
+    try:
+        await start_web_server()
+    except Exception as e:
+        logger.warning(f"Web serverni ishga tushirishda ogohlantirish: {e}")
 
     bot = Bot(
         token=config.BOT_TOKEN,
