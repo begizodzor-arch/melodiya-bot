@@ -18,7 +18,7 @@ def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
         'noplaylist': True,
         'extract_flat': True,
         'skip_download': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
 
     results = []
@@ -66,12 +66,14 @@ async def search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(_sync_search_youtube, query, limit)
 
 
+import subprocess
+
 def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
-    """YouTube qo'shig'ini MP3 formatida yuklab olish (sinxrron)."""
+    """YouTube qo'shig'ini MP3 formatida yuklab olish (ko'p bosqichli va barqaror)."""
     outtmpl = str(config.DOWNLOADS_DIR / f"{video_id}.%(ext)s")
     expected_mp3 = config.DOWNLOADS_DIR / f"{video_id}.mp3"
 
-    # Agar fayl allaqachon mavjud bo'lsa qayta yuklamaymiz
+    # 1. Agar fayl allaqachon mavjud bo'lsa qayta yuklamaymiz
     if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
         try:
             with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
@@ -91,51 +93,122 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
                     "duration": duration,
                 }
         except Exception:
-            pass
+            return {
+                "file_path": expected_mp3,
+                "video_id": video_id,
+                "title": "Musiqa",
+                "performer": "Ijrochi",
+                "duration": 0,
+            }
 
-    ydl_opts = {
-        # ── Ultra-tezkor sozlamalar ──
-        'format': 'ba[ext=m4a]/ba/b',
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'ffmpeg_location': config.FFMPEG_PATH,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-        'outtmpl': outtmpl,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'max_filesize': 50 * 1024 * 1024,
-        'socket_timeout': 15,
-        'retries': 2,
-        'fragment_retries': 2,
-        'concurrent_fragment_downloads': 4,
-    }
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    metadata = {"title": "Unknown", "duration": 0, "uploader": ""}
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-            info = ydl.extract_info(video_url, download=True)
+    # 2. Sinab ko'rish variantlari (Server va Render cheklovlarini aylanib o'tish uchun)
+    strategies = [
+        # 1-usul: Android mobil klient (bot-tekshiruvsiz va tezkor)
+        {
+            'format': 'ba[ext=m4a]/ba/b',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': config.FFMPEG_PATH,
+            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'outtmpl': outtmpl,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'max_filesize': 50 * 1024 * 1024,
+            'socket_timeout': 35,
+            'retries': 3,
+            'fragment_retries': 3,
+            'concurrent_fragment_downloads': 4,
+        },
+        # 2-usul: Umumiy standart format
+        {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': config.FFMPEG_PATH,
+            'outtmpl': outtmpl,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'max_filesize': 50 * 1024 * 1024,
+            'socket_timeout': 45,
+            'retries': 3,
+        },
+        # 3-usul: Postprocessorsiz yuklab olib, o'zimiz FFmpeg bilan aylantirish
+        {
+            'format': 'ba/b',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'outtmpl': outtmpl,
+            'max_filesize': 50 * 1024 * 1024,
+            'socket_timeout': 45,
+            'retries': 3,
+        }
+    ]
 
-            raw_title = info.get('title', 'Unknown')
-            duration = info.get('duration', 0)
-            uploader = info.get('uploader', '')
-            performer, title = clean_music_metadata(raw_title, uploader)
+    for strat_idx, opts in enumerate(strategies, start=1):
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                if info:
+                    metadata["title"] = info.get('title', metadata["title"])
+                    metadata["duration"] = info.get('duration', metadata["duration"])
+                    metadata["uploader"] = info.get('uploader', metadata["uploader"])
 
-            if expected_mp3.exists():
-                return {
-                    "file_path": expected_mp3,
-                    "video_id": video_id,
-                    "title": title,
-                    "performer": performer,
-                    "duration": duration,
-                }
-    except Exception as e:
-        logger.error(f"MP3 yuklab olishda xatolik ({video_id}): {e}")
-        if expected_mp3.exists():
-            expected_mp3.unlink(missing_ok=True)
+            # MP3 tayyormi tekshirish
+            if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
+                break
+
+            # Agar boshqa formatda yuklangan bo'lsa (masalan mp4 yoki m4a yoki webm)
+            other_files = list(config.DOWNLOADS_DIR.glob(f"{video_id}.*"))
+            for f in other_files:
+                if f != expected_mp3 and f.stat().st_size > 1024:
+                    # FFmpeg orqali mp3 ga o'tkazish
+                    try:
+                        cmd = [
+                            config.FFMPEG_PATH, "-y",
+                            "-i", str(f),
+                            "-vn",
+                            "-ab", "192k",
+                            "-ar", "44100",
+                            str(expected_mp3)
+                        ]
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                        f.unlink(missing_ok=True)
+                        break
+                    except Exception as fe:
+                        logger.warning(f"Qo'lda FFmpeg konvertatsiya xatosi: {fe}")
+
+            if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
+                break
+
+        except Exception as e:
+            logger.warning(f"Yuklab olish strategiyasi #{strat_idx} xatosi ({video_id}): {e}")
+
+    if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
+        performer, title = clean_music_metadata(metadata["title"], metadata["uploader"])
+        return {
+            "file_path": expected_mp3,
+            "video_id": video_id,
+            "title": title,
+            "performer": performer,
+            "duration": metadata["duration"],
+        }
+
+    # Barcha usullar muvaffaqiyatsiz bo'lsa tozalash
+    for f in config.DOWNLOADS_DIR.glob(f"{video_id}.*"):
+        f.unlink(missing_ok=True)
 
     return None
 
