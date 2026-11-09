@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import yt_dlp
@@ -19,7 +20,9 @@ def _get_cookie_file() -> Optional[str]:
     ]
     for p in paths:
         if p.exists() and p.stat().st_size > 50:
+            logger.info(f"Cookie holati: Mavjud ({p})")
             return str(p)
+    logger.warning("Cookie holati: Hali kiritilmagan")
     return None
 
 
@@ -32,12 +35,12 @@ def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
         'noplaylist': True,
         'extract_flat': True,
         'skip_download': True,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
+        'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'android']}},
     }
     if cookie_file:
         ydl_opts['cookiefile'] = cookie_file
 
-    # Qidiruv so'roviga "music" qo'shish - noto'g'ri natijalarni kamaytiradi
+    # "music" qo'shish - noto'g'ri natijalarni kamaytiradi (masalan "Sen" = Senator yangiliklari emas)
     enhanced_query = f"{query} music"
 
     results = []
@@ -59,7 +62,7 @@ def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
                 if not video_id or not raw_title:
                     continue
 
-                # Juda uzun videolarni o'tkazib yuborish (masalan 20 daqiqadan ko'p)
+                # Juda uzun videolarni o'tkazib yuborish
                 if duration and duration > config.MAX_DURATION_SECONDS:
                     continue
 
@@ -85,7 +88,45 @@ async def search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(_sync_search_youtube, query, limit)
 
 
-import subprocess
+def _try_soundcloud_download(query: str, outtmpl: str, expected_mp3: Path) -> Optional[Dict[str, Any]]:
+    """SoundCloud orqali qo'shiq yuklab olish (YouTube blok bo'lganda)."""
+    logger.info(f"SoundCloud orqali urinish: {query}")
+    sc_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'ffmpeg_location': config.FFMPEG_PATH,
+        'outtmpl': outtmpl,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'max_filesize': 50 * 1024 * 1024,
+        'socket_timeout': 60,
+        'retries': 3,
+    }
+    try:
+        with yt_dlp.YoutubeDL(sc_opts) as ydl:
+            sc_query = f"scsearch1:{query}"
+            info = ydl.extract_info(sc_query, download=True)
+            if info and expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
+                raw_title = info.get('title', 'Musiqa')
+                uploader = info.get('uploader', '')
+                performer, title = clean_music_metadata(raw_title, uploader)
+                logger.info(f"SoundCloud muvaffaqiyatli: {title}")
+                return {
+                    "file_path": expected_mp3,
+                    "video_id": info.get('id', 'sc'),
+                    "title": title,
+                    "performer": performer,
+                    "duration": info.get('duration', 0),
+                }
+    except Exception as e:
+        logger.warning(f"SoundCloud xatolik: {e}")
+    return None
+
 
 def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
     """YouTube qo'shig'ini MP3 formatida yuklab olish (ko'p bosqichli va barqaror)."""
@@ -94,45 +135,34 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
 
     # 1. Agar fayl allaqachon mavjud bo'lsa qayta yuklamaymiz
     if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
-        try:
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                info = ydl.extract_info(
-                    f"https://www.youtube.com/watch?v={video_id}",
-                    download=False
-                )
-                raw_title = info.get('title', 'Unknown')
-                duration = info.get('duration', 0)
-                uploader = info.get('uploader', '')
-                performer, title = clean_music_metadata(raw_title, uploader)
-                return {
-                    "file_path": expected_mp3,
-                    "video_id": video_id,
-                    "title": title,
-                    "performer": performer,
-                    "duration": duration,
-                }
-        except Exception:
-            return {
-                "file_path": expected_mp3,
-                "video_id": video_id,
-                "title": "Musiqa",
-                "performer": "Ijrochi",
-                "duration": 0,
-            }
+        return {
+            "file_path": expected_mp3,
+            "video_id": video_id,
+            "title": "Musiqa",
+            "performer": "Ijrochi",
+            "duration": 0,
+        }
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     metadata = {"title": "Unknown", "duration": 0, "uploader": ""}
 
-    # 2. Sinab ko'rish variantlari (Server va Render cheklovlarini aylanib o'tish uchun)
+    cookie_file = _get_cookie_file()
+
+    # YouTube yuklab olish urinishlari
     strategies = [
-        # 1-usul: TV Embedded - BOT TEKSHIRUVI YO'Q, serverlarda eng yaxshi ishlaydi
+        # 1-usul: TV Embedded - bot tekshiruvi yo'q (serverlarda eng yaxshi)
         {
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
-            'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['tv_embedded'],
+                    'player_skip': ['webpage'],
+                }
+            },
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -151,7 +181,11 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
-            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            },
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -161,7 +195,6 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             'max_filesize': 50 * 1024 * 1024,
             'socket_timeout': 60,
             'retries': 5,
-            'fragment_retries': 5,
             'http_headers': {
                 'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
             },
@@ -198,13 +231,14 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
         }
     ]
 
-    cookie_file = _get_cookie_file()
+    # Cookies'ni barcha strategiyalarga qo'shish
     for s in strategies:
         if cookie_file:
             s['cookiefile'] = cookie_file
 
     for strat_idx, opts in enumerate(strategies, start=1):
         try:
+            logger.info(f"YouTube yuklab olish #{strat_idx} urinish: {video_id}")
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
                 if info:
@@ -216,34 +250,33 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
                 break
 
-            # Agar boshqa formatda yuklangan bo'lsa (masalan mp4 yoki m4a yoki webm)
+            # Boshqa formatda yuklangan bo'lsa FFmpeg bilan aylantirish
             other_files = list(config.DOWNLOADS_DIR.glob(f"{video_id}.*"))
             for f in other_files:
                 if f != expected_mp3 and f.stat().st_size > 1024:
-                    # FFmpeg orqali mp3 ga o'tkazish
                     try:
                         cmd = [
                             config.FFMPEG_PATH, "-y",
                             "-i", str(f),
-                            "-vn",
-                            "-ab", "192k",
-                            "-ar", "44100",
+                            "-vn", "-ab", "192k", "-ar", "44100",
                             str(expected_mp3)
                         ]
                         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                         f.unlink(missing_ok=True)
                         break
                     except Exception as fe:
-                        logger.warning(f"Qo'lda FFmpeg konvertatsiya xatosi: {fe}")
+                        logger.warning(f"FFmpeg konvertatsiya xatosi: {fe}")
 
             if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
                 break
 
         except Exception as e:
-            logger.warning(f"Yuklab olish strategiyasi #{strat_idx} xatosi ({video_id}): {e}")
+            logger.warning(f"YouTube yuklab olish #{strat_idx} xatosi ({video_id}): {e}")
 
+    # YouTube muvaffaqiyatli bo'ldi
     if expected_mp3.exists() and expected_mp3.stat().st_size > 1024:
         performer, title = clean_music_metadata(metadata["title"], metadata["uploader"])
+        logger.info(f"YouTube muvaffaqiyatli: {title}")
         return {
             "file_path": expected_mp3,
             "video_id": video_id,
@@ -252,10 +285,16 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             "duration": metadata["duration"],
         }
 
-    # Barcha usullar muvaffaqiyatsiz bo'lsa tozalash
+    # YouTube barchasi muvaffaqiyatsiz — SoundCloud orqali urinish
+    logger.warning(f"YouTube blok qildi {video_id} — SoundCloud ga o'tilmoqda...")
+    sc_result = _try_soundcloud_download(metadata["title"] or video_id, outtmpl, expected_mp3)
+    if sc_result:
+        return sc_result
+
+    # Barcha usullar muvaffaqiyatsiz — tozalash
     for f in config.DOWNLOADS_DIR.glob(f"{video_id}.*"):
         f.unlink(missing_ok=True)
-
+    logger.error(f"Barcha usullar muvaffaqiyatsiz: {video_id}")
     return None
 
 
