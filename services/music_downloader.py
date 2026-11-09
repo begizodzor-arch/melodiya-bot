@@ -25,14 +25,13 @@ def _get_cookie_file() -> Optional[str]:
 
 
 def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
-    """YouTube dan qo'shiqlarni qidirish (Android API orqali, bloklarsiz)."""
+    """YouTube dan qo'shiqlarni qidirish (Default & VisionOS orqali)."""
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'extract_flat': True,
         'skip_download': True,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
 
     results = []
@@ -54,7 +53,6 @@ def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
                 if not video_id or not raw_title:
                     continue
 
-                # Juda uzun videolarni (podkast, film) o'tkazib yuborish
                 if duration and duration > config.MAX_DURATION_SECONDS:
                     continue
 
@@ -101,6 +99,45 @@ def _convert_to_mp3(src_file: Path, target_mp3: Path) -> bool:
     return False
 
 
+def _try_soundcloud_download(query: str, outtmpl: str, expected_mp3: Path) -> Optional[Dict[str, Any]]:
+    """SoundCloud fallback (YouTube server IP ni bloklaganda ishlatiladi)."""
+    logger.info(f"SoundCloud orqali qidirilmoqda: {query}")
+    sc_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'outtmpl': outtmpl,
+        'socket_timeout': 30,
+        'retries': 2,
+    }
+    try:
+        with yt_dlp.YoutubeDL(sc_opts) as ydl:
+            info = ydl.extract_info(f"scsearch1:{query}", download=True)
+            entries = info.get('entries', []) if info else []
+            if entries:
+                track = entries[0]
+                downloaded = [f for f in config.DOWNLOADS_DIR.glob(f"{expected_mp3.stem}.*") if f != expected_mp3]
+                for src in downloaded:
+                    if src.stat().st_size > 1024:
+                        if _convert_to_mp3(src, expected_mp3):
+                            src.unlink(missing_ok=True)
+                            raw_title = track.get('title', query)
+                            uploader = track.get('uploader', '')
+                            performer, title = clean_music_metadata(raw_title, uploader)
+                            logger.info(f"SoundCloud muvaffaqiyatli: {title}")
+                            return {
+                                "file_path": expected_mp3,
+                                "video_id": track.get('id', 'sc'),
+                                "title": title,
+                                "performer": performer,
+                                "duration": track.get('duration', 0),
+                            }
+    except Exception as e:
+        logger.warning(f"SoundCloud yuklab olish xatosi: {e}")
+    return None
+
+
 def _sync_download_track(
     video_id: str,
     title_hint: str = "",
@@ -108,8 +145,7 @@ def _sync_download_track(
 ) -> Optional[Dict[str, Any]]:
     """
     YouTube qo'shig'ini MP3 formatida yuklab olish.
-    Bot-chek va SABR bloklarini aylanib o'tish uchun Android / iOS stream olinadi,
-    so'ng to'g'ridan-to'g'ri FFmpeg orqali MP3 ga aylantiriladi.
+    VisionOS va Default mijozlar orqali YouTube bot-tekshiruvlarini aylanib o'tadi.
     """
     outtmpl = str(config.DOWNLOADS_DIR / f"{video_id}.%(ext)s")
     expected_mp3 = config.DOWNLOADS_DIR / f"{video_id}.mp3"
@@ -131,64 +167,41 @@ def _sync_download_track(
         "uploader": performer_hint or "",
     }
 
-    # Yuklab olish strategiyalari
-    # MUHIM: yt-dlp postprocessor ishlatilmaydi, chunki u ffprobe talab qilib xato beradi.
-    # O'rnimizda to'g'ridan-to'g'ri FFmpeg subprocess orqali konvertatsiya qilamiz.
+    # Strategiyalar ro'yxati
     strategies = [
-        # 1-usul: Android mobil klient - 18-format (360p mp4 - AAC audio stream)
-        # Server IP blokirovkasiga tushmaydi, SABR xatosi bermaydi.
+        # 1-usul: VisionOS mijozi (Apple Vision Pro) — Bot-tekshiruvlar yo'q, datacenter IP lardan ham ishlaydi
         {
-            'format': '18/best[ext=mp4]/best/bestaudio',
+            'format': 'ba/b',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}},
             'outtmpl': outtmpl,
-            'max_filesize': 50 * 1024 * 1024,
-            'socket_timeout': 30,
-            'retries': 3,
-            'http_headers': {
-                'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
-            },
-        },
-        # 2-usul: iOS klient
-        {
-            'format': '18/best[ext=mp4]/best/bestaudio',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['ios']}},
-            'outtmpl': outtmpl,
-            'max_filesize': 50 * 1024 * 1024,
+            'extractor_args': {'youtube': {'player_client': ['visionos']}},
             'socket_timeout': 30,
             'retries': 3,
         },
-        # 3-usul: mweb klient
+        # 2-usul: Standart yt-dlp default oqimlari
         {
-            'format': '18/best[ext=mp4]/best/bestaudio',
+            'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['mweb']}},
             'outtmpl': outtmpl,
-            'max_filesize': 50 * 1024 * 1024,
             'socket_timeout': 30,
             'retries': 3,
         },
     ]
 
-    # Agar cookies mavjud bo'lsa, web klientni 4-fallback sifatida qo'shamiz
+    # Cookie fayli mavjud bo'lsa, uni 3-usul sifatida qo'shamiz
     cookie_file = _get_cookie_file()
     if cookie_file:
         strategies.append({
-            'format': '18/best[ext=mp4]/best/bestaudio',
+            'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'cookiefile': cookie_file,
-            'extractor_args': {'youtube': {'player_client': ['web']}},
             'outtmpl': outtmpl,
-            'max_filesize': 50 * 1024 * 1024,
             'socket_timeout': 30,
             'retries': 2,
         })
@@ -203,7 +216,7 @@ def _sync_download_track(
                     metadata["duration"] = info.get('duration') or metadata["duration"]
                     metadata["uploader"] = info.get('uploader') or metadata["uploader"]
 
-            # Yuklangan faylni topib MP3 ga o'tkazish
+            # Yuklangan har qanday faylni (webm, m4a, mp4) MP3 ga o'tkazish
             downloaded = [f for f in config.DOWNLOADS_DIR.glob(f"{video_id}.*") if f != expected_mp3]
             for src in downloaded:
                 if src.stat().st_size > 1024:
@@ -230,6 +243,14 @@ def _sync_download_track(
 
         except Exception as e:
             logger.warning(f"Yuklab olish #{strat_idx} xatosi ({video_id}): {e}")
+
+    # Agar YouTube butunlay bloklagan bo'lsa, SoundCloud orqali qidirib yuklab olish
+    search_term = f"{performer_hint} {title_hint}".strip() or metadata["title"]
+    if search_term and search_term != "Unknown":
+        logger.info(f"YouTube barcha urinishlar bloklandi, SoundCloud'ga murojaat: {search_term}")
+        sc_res = _try_soundcloud_download(search_term, outtmpl, expected_mp3)
+        if sc_res:
+            return sc_res
 
     # Barcha usullar muvaffaqiyatsiz bo'lsa qoldiq fayllarni tozalash
     for f in config.DOWNLOADS_DIR.glob(f"{video_id}.*"):
