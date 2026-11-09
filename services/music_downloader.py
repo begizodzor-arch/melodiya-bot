@@ -25,6 +25,7 @@ def _get_cookie_file() -> Optional[str]:
 
 def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     """YouTube dan qo'shiqlarni qidirish (sinxrron qism)."""
+    cookie_file = _get_cookie_file()
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -33,11 +34,16 @@ def _sync_search_youtube(query: str, limit: int = 30) -> List[Dict[str, Any]]:
         'skip_download': True,
         'extractor_args': {'youtube': {'player_client': ['android']}},
     }
+    if cookie_file:
+        ydl_opts['cookiefile'] = cookie_file
+
+    # Qidiruv so'roviga "music" qo'shish - noto'g'ri natijalarni kamaytiradi
+    enhanced_query = f"{query} music"
 
     results = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = f"ytsearch{limit}:{query}"
+            search_query = f"ytsearch{limit}:{enhanced_query}"
             info = ydl.extract_info(search_query, download=False)
             entries = info.get('entries', []) if info else []
 
@@ -119,14 +125,14 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
 
     # 2. Sinab ko'rish variantlari (Server va Render cheklovlarini aylanib o'tish uchun)
     strategies = [
-        # 1-usul: Android mobil klient (bot-tekshiruvsiz va tezkor)
+        # 1-usul: Android klient + iOS (eng ishonchli)
         {
             'format': 'ba[ext=m4a]/ba/b',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
-            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -134,18 +140,22 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
                 'preferredquality': '192',
             }],
             'max_filesize': 50 * 1024 * 1024,
-            'socket_timeout': 35,
-            'retries': 3,
-            'fragment_retries': 3,
+            'socket_timeout': 60,
+            'retries': 5,
+            'fragment_retries': 5,
             'concurrent_fragment_downloads': 4,
+            'http_headers': {
+                'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
+            },
         },
-        # 2-usul: Umumiy standart format
+        # 2-usul: TV klient (bot-tekshiruvisiz, boshqa IP yo'nalishi)
         {
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'android']}},
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -153,20 +163,20 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
                 'preferredquality': '192',
             }],
             'max_filesize': 50 * 1024 * 1024,
-            'socket_timeout': 45,
-            'retries': 3,
+            'socket_timeout': 60,
+            'retries': 5,
         },
-        # 3-usul: Postprocessorsiz yuklab olib, o'zimiz FFmpeg bilan aylantirish
+        # 3-usul: mweb klient + oddiy format
         {
             'format': 'ba/b',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'extractor_args': {'youtube': {'player_client': ['mweb', 'android']}},
             'outtmpl': outtmpl,
             'max_filesize': 50 * 1024 * 1024,
-            'socket_timeout': 45,
-            'retries': 3,
+            'socket_timeout': 60,
+            'retries': 5,
         }
     ]
 
