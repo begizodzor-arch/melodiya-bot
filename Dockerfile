@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 
-# FFmpeg va tizim vositalarini o'rnatish
+# FFmpeg, Node.js (yt-dlp JS challenge / bot-tekshiruvlarni yechish uchun) va curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,4 +23,3 @@ ENV PORT=10000
 EXPOSE 10000
 
 CMD ["python", "main.py"]
-
