@@ -125,14 +125,14 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
 
     # 2. Sinab ko'rish variantlari (Server va Render cheklovlarini aylanib o'tish uchun)
     strategies = [
-        # 1-usul: Android klient + iOS (eng ishonchli)
+        # 1-usul: TV Embedded - BOT TEKSHIRUVI YO'Q, serverlarda eng yaxshi ishlaydi
         {
-            'format': 'ba[ext=m4a]/ba/b',
+            'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
-            'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -143,19 +143,37 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             'socket_timeout': 60,
             'retries': 5,
             'fragment_retries': 5,
-            'concurrent_fragment_downloads': 4,
+        },
+        # 2-usul: Android klient + cookies
+        {
+            'format': 'ba[ext=m4a]/ba/b',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': config.FFMPEG_PATH,
+            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'outtmpl': outtmpl,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'max_filesize': 50 * 1024 * 1024,
+            'socket_timeout': 60,
+            'retries': 5,
+            'fragment_retries': 5,
             'http_headers': {
                 'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
             },
         },
-        # 2-usul: TV klient (bot-tekshiruvisiz, boshqa IP yo'nalishi)
+        # 3-usul: iOS klient
         {
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': config.FFMPEG_PATH,
-            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'android']}},
+            'extractor_args': {'youtube': {'player_client': ['ios']}},
             'outtmpl': outtmpl,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -166,13 +184,13 @@ def _sync_download_track(video_id: str) -> Optional[Dict[str, Any]]:
             'socket_timeout': 60,
             'retries': 5,
         },
-        # 3-usul: mweb klient + oddiy format
+        # 4-usul: postprocessorsiz, keyin FFmpeg qo'lda
         {
             'format': 'ba/b',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['mweb', 'android']}},
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'android']}},
             'outtmpl': outtmpl,
             'max_filesize': 50 * 1024 * 1024,
             'socket_timeout': 60,
