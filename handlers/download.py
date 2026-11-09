@@ -24,7 +24,9 @@ async def _download_and_send(
     callback_or_message,
     video_id: str,
     user_id: int,
-    is_callback: bool = True
+    is_callback: bool = True,
+    title_hint: str = "",
+    performer_hint: str = ""
 ):
     """Musiqa yuklab yuborish — asosiy logika."""
     bot = callback_or_message.bot
@@ -82,7 +84,11 @@ async def _download_and_send(
     # Chat action: 'audio yuklanmoqda...' ko'rsatish
     await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
 
-    track_info = await download_track_as_mp3(video_id)
+    track_info = await download_track_as_mp3(
+        video_id,
+        title_hint=title_hint,
+        performer_hint=performer_hint
+    )
 
     if not track_info:
         msg_target = callback_or_message.message if is_callback else callback_or_message
@@ -163,7 +169,16 @@ async def cb_download_from_search(callback: CallbackQuery):
 
     track = results[track_index]
     video_id = track["video_id"]
-    await _download_and_send(callback, video_id, callback.from_user.id, is_callback=True)
+    title_hint = track.get("title", "")
+    performer_hint = track.get("performer", "")
+    await _download_and_send(
+        callback,
+        video_id,
+        callback.from_user.id,
+        is_callback=True,
+        title_hint=title_hint,
+        performer_hint=performer_hint
+    )
 
 
 @download_router.callback_query(F.data.startswith("dl_id:"))
