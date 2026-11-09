@@ -56,6 +56,9 @@ async def handle_search_query(message: Message, state: FSMContext):
         await message.answer("❌ Qidiruvda xatolik yuz berdi. Keyinroq urinib ko'ring.")
         return
 
+    # Agar birinchi natija musiqa bilan bog'liq ko'rinmasa, faqat audio filtr qo'llanadi
+    # Bu holda natijalar allaqachon music_downloader ichida filtrlangan
+
     if not results:
         await message.answer(
             f"😕 <b>«{query}»</b> bo'yicha hech narsa topilmadi.\n\nBoshqa so'z bilan qidiring.",
